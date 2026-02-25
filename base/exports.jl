@@ -112,6 +112,7 @@ export
     OncePerProcess,
     OncePerTask,
     OncePerThread,
+    OncePerId,
     PermutedDimsArray,
     QuickSort,
     Rational,

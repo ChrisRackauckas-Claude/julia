@@ -1127,6 +1127,28 @@ Dict(1 => rand(2,3), 'c' => "asdf") # just make sure this does not trigger a dep
     GC.@preserve A B C D nothing
 end
 
+# OncePerId tests
+let once = OncePerId{Vector{Nothing}}() do key
+        return [nothing]
+    end
+    @test typeof(once) <: OncePerId{Vector{Nothing}}
+    key1 = IOBuffer()
+    x = once(key1)
+    @test x === once(key1) # same key returns cached value
+    key2 = IOBuffer()
+    y = once(key2)
+    @test y !== x           # different key returns different value
+    @test y === once(key2)  # same key2 returns cached value
+end
+let once = OncePerId{Int}() do key
+        error("expected")
+    end
+    # errors are not cached, so each call retries the initializer
+    key = IOBuffer()
+    @test_throws ErrorException("expected") once(key)
+    @test_throws ErrorException("expected") once(key)
+end
+
 import Base.PersistentDict
 @testset "PersistentDict" begin
     @testset "HAMT HashState" begin

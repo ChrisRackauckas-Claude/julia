@@ -212,3 +212,53 @@ end
 @propagate_inbounds Iterators.only(d::WeakKeyDict) = Iterators._only(d, first)
 
 filter!(f, d::WeakKeyDict) = filter_in_one_pass!(f, d)
+
+"""
+    OncePerId{T}(init::Function)(key) -> T
+
+Calling a `OncePerId` object with a key returns a value of type `T` by
+running the function `initializer(key)` exactly once per unique key object.
+All future calls with the same key will return exactly the same value.
+Results are cached in a [`WeakKeyDict`](@ref), so entries are automatically
+cleaned up when the key is garbage collected. Keys must be mutable objects.
+
+Thread-safe: the lookup, initialization, and store are performed under the
+`WeakKeyDict`'s lock so that concurrent calls for the same key do not run the
+initializer twice. If the initializer throws, no value is cached and the next
+call will retry.
+
+!!! compat "Julia 1.14"
+    This type requires Julia 1.14 or later.
+
+# Examples
+
+```jldoctest
+julia> const ocheck = Base.OncePerId{Int}() do io
+           println("Checking IO capability...done.")
+           return bytesavailable(io)
+       end;
+
+julia> ocheck(stdin)
+Checking IO capability...done.
+0
+
+julia> ocheck(stdin) # cached, no print
+0
+```
+"""
+mutable struct OncePerId{T, F} <: Function
+    const cache::WeakKeyDict{Any, T}
+    const initializer::F
+
+    OncePerId{T}(initializer::F) where {T, F} = new{T,F}(WeakKeyDict{Any, T}(), initializer)
+    OncePerId{T,F}(initializer::F) where {T, F} = new{T,F}(WeakKeyDict{Any, T}(), initializer)
+    function OncePerId(initializer)
+        T = Base.promote_op(initializer, Any)
+        new{T, typeof(initializer)}(WeakKeyDict{Any, T}(), initializer)
+    end
+end
+function (once::OncePerId{T,F})(key) where {T,F}
+    get!(once.cache, key) do
+        once.initializer(key)
+    end::T
+end

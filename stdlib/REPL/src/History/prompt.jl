@@ -136,6 +136,10 @@ end
 function savedest(term::Base.Terminals.TTYTerminal)
     out = term.out_stream
     print(out, "\e[1G\e[J")
+    # If clipboard is not available, skip the toggle and go straight to file save
+    if !clipboard_available(term)
+        return :filesave
+    end
     clipsave = true
     try
         print(out, get(Base.current_terminfo(), :cursor_invisible, ""))

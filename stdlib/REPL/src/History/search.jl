@@ -177,7 +177,7 @@ function run_display!((; term, pstate), events::Channel{Symbol}, hist::Vector{Hi
             continue
         elseif event === :copy
             content = strip(fullselection(state).text)
-            isempty(content) || saveclipboard(term.out_stream, content)
+            isempty(content) || saveclipboard(term, content)
             return EMPTY_STATE
         elseif event === :filesave
             content = strip(fullselection(state).text)
@@ -376,13 +376,85 @@ function savefile(term::Base.Terminals.TTYTerminal, content::AbstractString)
 end
 
 """
+    _query_da1_osc52(term::Base.Terminals.TTYTerminal) -> Bool
+
+Send a DA1 (Primary Device Attributes) query (`\\e[c`) and check whether the
+terminal advertises feature `52` (OSC 52 clipboard) in its response.
+Returns `false` on timeout or if the streams are not TTYs.
+
+See neovim/neovim#34472 for background on using DA1 rather than `XTGETTCAP`.
+"""
+function _query_da1_osc52(term::Base.Terminals.TTYTerminal)
+    out = term.out_stream
+    inp = term.in_stream
+    (out isa Base.TTY && inp isa Base.TTY) || return false
+    # Send DA1 query
+    write(out, "\e[c")
+    # Read response byte-by-byte with 600 ms timeout.
+    # DA1 response format: \e[?<param1>;<param2>;...;<paramN>c
+    buf = UInt8[]
+    deadline = time() + 0.6
+    while time() < deadline
+        if bytesavailable(inp) > 0
+            b = read(inp, UInt8)
+            push!(buf, b)
+            # DA1 response always ends with 'c'
+            if b == UInt8('c') && length(buf) >= 4
+                resp = String(copy(buf))
+                m = match(r"\e\[\?([0-9;]+)c$", resp)
+                if m !== nothing
+                    return "52" in split(m.captures[1], ';')
+                end
+            end
+        else
+            sleep(0.005)
+        end
+    end
+    return false
+end
+
+"""
+    _can_osc52(term) -> Bool
+
+Cached per-terminal DA1 query for OSC 52 clipboard support.
+"""
+const _can_osc52 = OncePerId{Bool}(_query_da1_osc52)
+
+"""
+    osc52_copy(io::IO, content::AbstractString)
+
+Write the OSC 52 escape sequence to set the system clipboard via the terminal.
+"""
+function osc52_copy(io::IO, content::AbstractString)
+    write(io, "\e]52;c;", base64encode(content), "\e\\")
+end
+
+"""
+    clipboard_available(term::Base.Terminals.TTYTerminal) -> Bool
+
+Return `true` if clipboard saving is possible, either via system clipboard
+commands or via OSC 52 terminal escape sequences.
+"""
+clipboard_available(term::Base.Terminals.TTYTerminal) =
+    InteractiveUtils.has_system_clipboard() || _can_osc52(term)
+
+"""
     saveclipboard(term::Base.Terminals.TTYTerminal, content::AbstractString)
 
-Save `content` to the clipboard and record the action.
+Save `content` to the clipboard and record the action. Falls back to OSC 52
+terminal escape sequences when no system clipboard command is available.
 """
-function saveclipboard(msgio::IO, content::AbstractString)
+function saveclipboard(term::Base.Terminals.TTYTerminal, content::AbstractString)
+    out = term.out_stream
     nlines = count('\n', content) + 1
-    clipboard(content)
-    println(msgio, S"\e[1G\e[2K{grey,bold:history>} {shadow:Copied $nlines \
+    if InteractiveUtils.has_system_clipboard()
+        InteractiveUtils.clipboard(content)
+    elseif _can_osc52(term)
+        osc52_copy(out, content)
+    else
+        println(out, S"\e[1G\e[2K{grey,bold:history>} {red:No clipboard mechanism available}\n")
+        return
+    end
+    println(out, S"\e[1G\e[2K{grey,bold:history>} {shadow:Copied $nlines \
                      $(ifelse(nlines == 1, \"line\", \"lines\")) to clipboard}\n")
 end

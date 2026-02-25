@@ -37,6 +37,7 @@ __init__
 Base.OncePerProcess
 Base.OncePerTask
 Base.OncePerThread
+Base.OncePerId
 Base.which(::Any, ::Any)
 Base.methods
 Base.@show
