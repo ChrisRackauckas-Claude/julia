@@ -1369,10 +1369,21 @@ function _defaultctors(@nospecialize(ty), functionloc)
         if ft === Any
             @inbounds body_args[i + 1] = Core.Argument(i + 1)
         else
-            @inbounds body_args[i + 1] = Expr(:call, GlobalRef(Base, :convert),
-                                               Expr(:call, GlobalRef(Core, :fieldtype),
-                                                    Core.Argument(1), i),
-                                               Core.Argument(i + 1))
+            # Use an isa check to avoid depending on convert inlining.
+            # This matches the old convert-for-type-decl pattern:
+            #   isa(arg, fieldtype(self, i)) ? arg : convert(fieldtype(self, i), arg)
+            # The isa check is important because user code may define ambiguous
+            # convert methods (e.g. convert(::Any, v::T) = v) that prevent the
+            # optimizer from inlining convert(fieldtype(self, i), arg) when the
+            # field type is Any after specialization.
+            ft_expr = Expr(:call, GlobalRef(Core, :fieldtype), Core.Argument(1), i)
+            isa_check = Expr(:call, GlobalRef(Core, :isa), Core.Argument(i + 1), ft_expr)
+            convert_expr = Expr(:call, GlobalRef(Base, :convert),
+                                Expr(:call, GlobalRef(Core, :fieldtype),
+                                     Core.Argument(1), i),
+                                Core.Argument(i + 1))
+            @inbounds body_args[i + 1] = Expr(:if, isa_check,
+                                               Core.Argument(i + 1), convert_expr)
         end
         i = i + 1
     end
